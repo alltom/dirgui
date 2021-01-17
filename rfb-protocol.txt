@@ -1,0 +1,108 @@
+https://tools.ietf.org/html/rfc6143 (version 3.8?)
+
+usually TCP/IP connection port 5900
+multi-byte integers (except pixel values) are big-endian
+
+connection phases:
+	handshake: agree on protocol version and security type
+		server sends ProtocolVersion w/highest supported protocol version
+			12 bytes "RFB xxx.yyy\n"
+			xxx.yyy is left-padded version number, like 003.008
+		client replies with specific version (same format?)
+		server sends security types it supports
+			U8: number of security types
+			one U8 for each security type
+				1 is no security
+		client replies with U8 indicating the requested security type
+		server replies with SecurityResult
+			U32: 0 if OK, 1 if failed
+	initialization: exchange ClientInit and ServerInit messages
+		client sends ClientInit
+			U8: 0 if other clients should be disconnected, any other value otherwise
+		server sends ServerInit
+			U16: framebuffer width
+			U16: framebuffer height
+			PIXEL_FORMAT (16 bytes)
+				U8: bits per pixel (8, 16, or 32)
+				U8: depth (number of useful bits in the pixel value, <= previous value)
+				U8: big-endian flag (non-zero if multi-byte pixels are big-endian)
+				U8: true color flag (0 if palette colors are used, otherwise decoded according to values below)
+				U16: red max (max red value, 2^(num red bits) - 1) (big-endian)
+				U16: green max
+				U16: blue max
+				U8: red shift (# shifts required to get the red color value)
+				U8: green shift
+				U8: blue shift
+				3 bytes of padding
+			U32: length of the desktop's name
+			name of the desktop as ASCII
+	normal: message exchange, each preceded by message-type byte
+		messages from client
+			SetPixelFormat
+				U8: 0
+				3 bytes of padding
+				PIXEL_FORMAT (see above)
+			SetEncodings
+				server can always use raw, and is free to ignore SetEncodings in general
+				U8: 2
+				1 byte of padding
+				U16: number of encodings
+				S32 for each encoding type
+					0: raw
+					1: CopyRect
+					2: RRE
+					5: Hextile
+					15: TRLE
+					16: ZRLE
+					-239: Cursor pseudo-encoding
+					-223: DesktopSize pseudo-encoding
+			FramebufferUpdateRequest
+				U8: 3
+				U8: 0 if full update requested, otherwise incremental update is fine
+				U16: x position
+				U16: y position
+				U16: width
+				U16: height
+			KeyEvent
+				U8: 4
+				U8: 0 on release, otherwise pressed
+				2 bytes of padding
+				U32: keysym (see X window system, https://pkg.go.dev/golang.org/x/exp/shiny/driver/internal/x11key)
+			PointerEvent
+				U8: 5
+				U8: button mask
+				U16: x position
+				U16: y position
+			ClientCutText (update paste buffer)
+				U8: 6
+				3 bytes of padding
+				U32: text length
+				ISO 8859-1 (Latin-1) byte array
+		messages from the server
+			FramebufferUpdate
+				U8: 0
+				1 byte of padding
+				U16: number of rectangles
+					U16: x position
+					U16: y position
+					U16: width
+					U16: height
+					S32: encoding type
+					pixel data
+						Raw: width*height*bytesPerPixel byte array
+						CopyRect (copy from this rect on the client) (shouldn't refer to regions covered by other rectangles in this update)
+							U16: source x position
+							U16: source y position
+						TRLE (good, but complicated)
+						ZRLE (good, but complicated)
+			SetColorMapEntries
+			Bell
+				U8: 2
+			ServerCutText (update paste buffer)
+				U8: 3
+				3 bytes of padding
+				U32: text length
+				ISO 8859-1 (Latin-1) byte array
+
+https://web.archive.org/web/20140921005313/http://grox.net/doc/apps/vnc/rfbproto.pdf
+Version 3.3
