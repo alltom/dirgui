@@ -58,7 +58,6 @@ func serve(conn io.ReadWriter) error {
 	var update FramebufferUpdate
 	var keyEvent KeyEvent
 	var pointerEvent PointerEvent
-	const old = true
 
 	log.Print("writing ProtocolVersion…")
 	if _, err := io.WriteString(conn, "RFB 003.008\n"); err != nil {
@@ -66,12 +65,16 @@ func serve(conn io.ReadWriter) error {
 	}
 
 	log.Print("reading ProtocolVersion…")
+	var major, minor int
 	if _, err := io.ReadFull(conn, buf[:12]); err != nil {
 		return fmt.Errorf("couldn't read ProtocolVersion: %v", err)
 	}
+	if _, err := fmt.Sscanf(string(buf[:12]), "RFB %03d.%03d\n", &major, &minor); err != nil {
+		return fmt.Errorf("couldn't parse ProtocolVersion %q: %v", buf[:12], err)
+	}
 	log.Printf("client requests protocol version %q", buf[:12])
 
-	if old {
+	if major == 3 && minor == 3 {
 		// RFB 3.3
 		log.Print("sending authentication scheme…")
 		bo.PutUint32(buf, 2) // VNC authentication (macOS won't connect without authentication)
@@ -89,7 +92,7 @@ func serve(conn io.ReadWriter) error {
 		if _, err := conn.Write(buf[:4]); err != nil {
 			return fmt.Errorf("couldn't write authentication response: %v", err)
 		}
-	} else {
+	} else if major == 3 && minor == 8 {
 		// RFB 3.8
 		log.Print("writing potential security types…")
 		if _, err := conn.Write([]byte{1, 1}); err != nil {
@@ -108,6 +111,8 @@ func serve(conn io.ReadWriter) error {
 		if _, err := conn.Write([]byte{0}); err != nil {
 			return fmt.Errorf("couldn't confirm security type: %v", err)
 		}
+	} else {
+		return fmt.Errorf("server only supports RFB 3.3 and 3.8, but client requested %d.%d", major, minor)
 	}
 
 	log.Print("reading ClientInit…")
