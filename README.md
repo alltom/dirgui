@@ -8,3 +8,7 @@ And so dirgui was born…
 
 * main.go implements a VNC server, the RFB 3.3 protocol specifically
 * ui.go implements a GUI that creates a widget for each file in a directory, a button for each executable and a single-line text field for all other files
+
+---
+
+For help, e-mail tom@alltom.com or contact [@alltom](https://twitter.com/alltom) on Twitter
