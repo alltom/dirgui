@@ -10,7 +10,6 @@ import (
 	"io"
 	"log"
 	"net"
-	"os"
 )
 
 var bo = binary.BigEndian
@@ -36,7 +35,6 @@ func main() {
 		log.Fatalf("couldn't listen: %v", err)
 	}
 	log.Print("listening…")
-	var disconnects int
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
@@ -49,11 +47,6 @@ func main() {
 			}
 			if err := conn.Close(); err != nil {
 				log.Printf("couldn't close connection: %v", err)
-			}
-			disconnects++
-			if disconnects >= 2 {
-				log.Printf("quitting after the second disconnect…")
-				os.Exit(0)
 			}
 		}(conn)
 	}
