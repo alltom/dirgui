@@ -1,31 +1,17 @@
 package main
 
 import (
-	"bytes"
+	"bufio"
 	"encoding/binary"
 	"flag"
 	"fmt"
+	"github.com/alltom/dirgui/rfb"
 	"golang.org/x/text/encoding/charmap"
 	"image"
 	"io"
 	"log"
 	"net"
 )
-
-var bo = binary.BigEndian
-var pixelFormat = PixelFormat{
-	BitsPerPixel: 32,
-	BitDepth:     24,
-	BigEndian:    true,
-	TrueColor:    true,
-
-	RedMax:     255,
-	GreenMax:   255,
-	BlueMax:    255,
-	RedShift:   24,
-	GreenShift: 16,
-	BlueShift:  8,
-}
 
 func main() {
 	flag.Parse()
@@ -42,7 +28,7 @@ func main() {
 		}
 		log.Print("accepted connection")
 		go func(conn net.Conn) {
-			if err := serve(conn); err != nil {
+			if err := rfbServe(conn); err != nil {
 				log.Printf("serve failed: %v", err)
 			}
 			if err := conn.Close(); err != nil {
@@ -52,19 +38,33 @@ func main() {
 	}
 }
 
-func serve(conn io.ReadWriter) error {
+func rfbServe(conn io.ReadWriter) error {
 	buf := make([]byte, 256)
-	var updateRequest FramebufferUpdateRequest
-	var update FramebufferUpdate
-	var keyEvent KeyEvent
-	var pointerEvent PointerEvent
+	w := bufio.NewWriter(conn)
 
-	log.Print("writing ProtocolVersion…")
+	var bo = binary.BigEndian
+	var pixelFormat = rfb.PixelFormat{
+		BitsPerPixel: 32,
+		BitDepth:     24,
+		BigEndian:    true,
+		TrueColor:    true,
+
+		RedMax:     255,
+		GreenMax:   255,
+		BlueMax:    255,
+		RedShift:   24,
+		GreenShift: 16,
+		BlueShift:  8,
+	}
+	var updateRequest rfb.FramebufferUpdateRequest
+	var update rfb.FramebufferUpdate
+	var keyEvent rfb.KeyEvent
+	var pointerEvent rfb.PointerEvent
+
 	if _, err := io.WriteString(conn, "RFB 003.008\n"); err != nil {
 		return fmt.Errorf("couldn't write ProtocolVersion: %v", err)
 	}
 
-	log.Print("reading ProtocolVersion…")
 	var major, minor int
 	if _, err := io.ReadFull(conn, buf[:12]); err != nil {
 		return fmt.Errorf("couldn't read ProtocolVersion: %v", err)
@@ -72,34 +72,28 @@ func serve(conn io.ReadWriter) error {
 	if _, err := fmt.Sscanf(string(buf[:12]), "RFB %03d.%03d\n", &major, &minor); err != nil {
 		return fmt.Errorf("couldn't parse ProtocolVersion %q: %v", buf[:12], err)
 	}
-	log.Printf("client requests protocol version %q", buf[:12])
 
 	if major == 3 && minor == 3 {
 		// RFB 3.3
-		log.Print("sending authentication scheme…")
 		bo.PutUint32(buf, 2) // VNC authentication (macOS won't connect without authentication)
 		if _, err := conn.Write(buf[:20]); err != nil {
 			return fmt.Errorf("couldn't write authentication scheme: %v", err)
 		}
 
-		log.Print("reading challenge response…")
 		if _, err := io.ReadFull(conn, buf[:16]); err != nil {
 			return fmt.Errorf("couldn't read challenge response: %v", err)
 		}
 
-		log.Print("saying authentication succeeded…")
 		bo.PutUint32(buf, 0) // OK
 		if _, err := conn.Write(buf[:4]); err != nil {
 			return fmt.Errorf("couldn't write authentication response: %v", err)
 		}
 	} else if major == 3 && minor == 8 {
 		// RFB 3.8
-		log.Print("writing potential security types…")
 		if _, err := conn.Write([]byte{1, 1}); err != nil {
 			return fmt.Errorf("couldn't write security types: %v", err)
 		}
 
-		log.Print("reading security type…")
 		if _, err := io.ReadFull(conn, buf[:1]); err != nil {
 			return fmt.Errorf("couldn't read security type: %v", err)
 		}
@@ -107,7 +101,6 @@ func serve(conn io.ReadWriter) error {
 			return fmt.Errorf("client must use security type 1, got %q", buf[0])
 		}
 
-		log.Print("writing security type…")
 		if _, err := conn.Write([]byte{0}); err != nil {
 			return fmt.Errorf("couldn't confirm security type: %v", err)
 		}
@@ -119,11 +112,6 @@ func serve(conn io.ReadWriter) error {
 	if _, err := io.ReadFull(conn, buf[:1]); err != nil {
 		return fmt.Errorf("couldn't read ClientInit: %v", err)
 	}
-	if buf[0] == 0 {
-		log.Print("client requests other clients be disconnected")
-	} else {
-		log.Print("client requests other clients remain connected")
-	}
 
 	windowRect := updateUI(image.NewNRGBA(image.ZR), &keyEvent, &pointerEvent)
 	if windowRect.Min != image.Pt(0, 0) {
@@ -131,10 +119,10 @@ func serve(conn io.ReadWriter) error {
 	}
 	bo.PutUint16(buf[0:], uint16(windowRect.Dx())) // width
 	bo.PutUint16(buf[2:], uint16(windowRect.Dy())) // height
-	pixelFormat.Write(buf[4:])
-	bo.PutUint32(buf[20:], 3) // length of name
-	copy(buf[24:], "YO!")
-	if _, err := conn.Write(buf[:27]); err != nil {
+	pixelFormat.Write(buf[4:], bo)
+	bo.PutUint32(buf[20:], 6) // length of name
+	copy(buf[24:], "dirgui")
+	if _, err := conn.Write(buf[:30]); err != nil {
 		return fmt.Errorf("couldn't write ServerInit: %v", err)
 	}
 
@@ -144,11 +132,10 @@ func serve(conn io.ReadWriter) error {
 		}
 		switch buf[0] {
 		case 0: // SetPixelFormat
-			if _, err := io.ReadFull(conn, buf[:3+PixelFormatEncodingLength]); err != nil {
+			if _, err := io.ReadFull(conn, buf[:3+rfb.PixelFormatEncodingLength]); err != nil {
 				return fmt.Errorf("couldn't read pixel format in SetPixelFormat: %v", err)
 			}
-			pixelFormat.Read(buf[3:])
-			log.Printf("client requested pixel format: %+v", pixelFormat)
+			pixelFormat.Read(buf[3:], bo)
 
 		case 2: // SetEncodings
 			if _, err := io.ReadFull(conn, buf[:3]); err != nil {
@@ -168,38 +155,42 @@ func serve(conn io.ReadWriter) error {
 			log.Printf("client requested one of %d encodings: %v", encodingCount, requestedEncodings)
 
 		case 3: // FramebufferUpdateRequest
-			if _, err := io.ReadFull(conn, buf[:FramebufferUpdateRequestEncodingLength]); err != nil {
+			if _, err := io.ReadFull(conn, buf[:rfb.FramebufferUpdateRequestEncodingLength]); err != nil {
 				return fmt.Errorf("couldn't read FramebufferUpdateRequest: %v", err)
 			}
-			updateRequest.Read(buf)
+			updateRequest.Read(buf, bo)
 
-			var updateBuf bytes.Buffer
-			updateBuf.Write([]byte{0, 0}) // message type and padding
-			img := NewPixelFormatImage(pixelFormat, image.Rect(int(updateRequest.X), int(updateRequest.Y), int(updateRequest.X)+int(updateRequest.Width), int(updateRequest.Y)+int(updateRequest.Height)))
+			img := rfb.NewPixelFormatImage(pixelFormat, image.Rect(int(updateRequest.X), int(updateRequest.Y), int(updateRequest.X)+int(updateRequest.Width), int(updateRequest.Y)+int(updateRequest.Height)))
 			updateUI(img, &keyEvent, &pointerEvent)
-			update.Rectangles = []*FramebufferUpdateRect{
-				&FramebufferUpdateRect{
+			update.Rectangles = []*rfb.FramebufferUpdateRect{
+				&rfb.FramebufferUpdateRect{
 					X: updateRequest.X, Y: updateRequest.Y, Width: updateRequest.Width, Height: updateRequest.Height,
 					EncodingType: 0, PixelData: img.Pix,
 				},
 			}
-			update.Write(&updateBuf)
-			if _, err := updateBuf.WriteTo(conn); err != nil {
-				return fmt.Errorf("couldn't write update response: %v", err)
+
+			if _, err := w.Write([]byte{0, 0}); err != nil { // message type and padding
+				return fmt.Errorf("couldn't write FramebufferUpdate header: %v", err)
+			}
+			if err := update.Write(w, bo); err != nil {
+				return fmt.Errorf("couldn't write FramebufferUpdate: %v", err)
+			}
+			if err := w.Flush(); err != nil {
+				return fmt.Errorf("couldn't write FramebufferUpdate: %v", err)
 			}
 
 		case 4: // KeyEvent
-			if _, err := io.ReadFull(conn, buf[:KeyEventEncodingLength]); err != nil {
+			if _, err := io.ReadFull(conn, buf[:rfb.KeyEventEncodingLength]); err != nil {
 				return fmt.Errorf("couldn't read KeyEvent: %v", err)
 			}
-			keyEvent.Read(buf)
+			keyEvent.Read(buf, bo)
 			updateUI(image.NewNRGBA(image.ZR), &keyEvent, &pointerEvent)
 
 		case 5: // PointerEvent
-			if _, err := io.ReadFull(conn, buf[:PointerEventEncodingLength]); err != nil {
+			if _, err := io.ReadFull(conn, buf[:rfb.PointerEventEncodingLength]); err != nil {
 				return fmt.Errorf("couldn't read PointerEvent: %v", err)
 			}
-			pointerEvent.Read(buf)
+			pointerEvent.Read(buf, bo)
 			updateUI(image.NewNRGBA(image.ZR), &keyEvent, &pointerEvent)
 
 		case 6: // ClientCutText
@@ -219,128 +210,11 @@ func serve(conn io.ReadWriter) error {
 			}
 			text := string(converted)
 			log.Printf("client copied text: %q", text)
+
+		default:
+			return fmt.Errorf("received unrecognized message %d", buf[0])
 		}
 	}
 
 	return nil
-}
-
-type PixelFormat struct {
-	BitsPerPixel uint8
-	BitDepth     uint8
-	BigEndian    bool
-	TrueColor    bool
-
-	RedMax     uint16
-	GreenMax   uint16
-	BlueMax    uint16
-	RedShift   uint8
-	GreenShift uint8
-	BlueShift  uint8
-}
-
-const PixelFormatEncodingLength = 16
-
-func (pf *PixelFormat) Read(buf []byte) {
-	pf.BitsPerPixel = buf[0]
-	pf.BitDepth = buf[1]
-	pf.BigEndian = buf[2] != 0
-	pf.TrueColor = buf[3] != 0
-
-	pf.RedMax = bo.Uint16(buf[4:])
-	pf.GreenMax = bo.Uint16(buf[6:])
-	pf.BlueMax = bo.Uint16(buf[8:])
-	pf.RedShift = buf[10]
-	pf.GreenShift = buf[11]
-	pf.BlueShift = buf[12]
-}
-
-func (pf *PixelFormat) Write(buf []byte) {
-	buf[0] = pf.BitsPerPixel
-	buf[1] = pf.BitDepth
-	if pf.BigEndian {
-		buf[2] = 1
-	} else {
-		buf[2] = 0
-	}
-	if pf.TrueColor {
-		buf[3] = 1
-	} else {
-		buf[3] = 0
-	}
-	bo.PutUint16(buf[4:], pf.RedMax)
-	bo.PutUint16(buf[6:], pf.GreenMax)
-	bo.PutUint16(buf[8:], pf.BlueMax)
-	buf[10] = pf.RedShift
-	buf[11] = pf.GreenShift
-	buf[12] = pf.BlueShift
-}
-
-type FramebufferUpdateRequest struct {
-	Incremental bool
-	X           uint16
-	Y           uint16
-	Width       uint16
-	Height      uint16
-}
-
-const FramebufferUpdateRequestEncodingLength = 9
-
-func (r *FramebufferUpdateRequest) Read(buf []byte) {
-	r.Incremental = buf[0] != 0
-	r.X = bo.Uint16(buf[1:])
-	r.Y = bo.Uint16(buf[3:])
-	r.Width = bo.Uint16(buf[5:])
-	r.Height = bo.Uint16(buf[7:])
-}
-
-type KeyEvent struct {
-	Pressed bool
-	KeySym  uint32
-}
-
-const KeyEventEncodingLength = 7
-
-func (e *KeyEvent) Read(buf []byte) {
-	e.Pressed = buf[0] != 0
-	e.KeySym = bo.Uint32(buf[3:])
-}
-
-type PointerEvent struct {
-	ButtonMask uint8
-	X          uint16
-	Y          uint16
-}
-
-const PointerEventEncodingLength = 5
-
-func (e *PointerEvent) Read(buf []byte) {
-	e.ButtonMask = buf[0]
-	e.X = bo.Uint16(buf[1:])
-	e.Y = bo.Uint16(buf[3:])
-}
-
-type FramebufferUpdate struct {
-	Rectangles []*FramebufferUpdateRect
-}
-
-type FramebufferUpdateRect struct {
-	X            uint16
-	Y            uint16
-	Width        uint16
-	Height       uint16
-	EncodingType int32
-	PixelData    []byte
-}
-
-func (u *FramebufferUpdate) Write(buf *bytes.Buffer) {
-	binary.Write(buf, bo, uint16(len(u.Rectangles)))
-	for _, rect := range u.Rectangles {
-		binary.Write(buf, bo, rect.X)
-		binary.Write(buf, bo, rect.Y)
-		binary.Write(buf, bo, rect.Width)
-		binary.Write(buf, bo, rect.Height)
-		binary.Write(buf, bo, rect.EncodingType)
-		buf.Write(rect.PixelData)
-	}
 }

@@ -6,9 +6,13 @@
 
 And so dirgui was born…
 
-* main.go implements a VNC server, the RFB 3.3 protocol specifically
-* ui.go implements a GUI that creates a widget for each file in a directory, a button for each executable and a single-line text field for all other files
+* cmd/dirgui/main.go implements a VNC server to host the GUI, using the RFB 3.3 or 3.8 protocols, specifically
+* cmd/dirgui/ui.go implements a GUI (drawn with Go's built-in image library) that creates a widget for each file in a directory, a button for each executable and a single-line text field for all other files
+
+Custom per-file editors are supported. For example, to use a custom editor for foo.gif, build cmd/dirgui-gif and copy/symlink its binary to "foo.gif.gui". dirgui-gif implements a VNC server whose contents will be spliced into dirgui. (Key and pointer events are not yet forwarded, though…)
 
 ---
 
 For help, e-mail tom@alltom.com or contact [@alltom](https://twitter.com/alltom) on Twitter
+
+I recommend copying the parts you need into your project. I don't consider this module's API stable at all.

@@ -5,6 +5,7 @@
 *.so
 *.dylib
 dirgui
+dirgui-gif
 
 # Test binary, built with `go test -c`
 *.test
